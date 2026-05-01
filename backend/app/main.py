@@ -70,6 +70,10 @@ async def _init_default_configs() -> None:
             "value": str(settings.DEFAULT_MAX_MESSAGES_PER_MINUTE),
             "description": "Max messages an IP can send per minute",
         },
+        "passcode_min_length": {
+            "value": "4",
+            "description": "Minimum length for room passcode",
+        },
     }
 
     async with async_session_factory() as db:

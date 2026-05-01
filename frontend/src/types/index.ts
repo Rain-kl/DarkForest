@@ -29,6 +29,14 @@ export interface WSMessage {
   timestamp?: string | null;
 }
 
+export interface MessageResponse {
+  id: string;
+  room_id: string;
+  content: string;
+  nickname: string;
+  created_at: string;
+}
+
 export interface SystemStats {
   total_rooms: number;
   active_rooms: number;

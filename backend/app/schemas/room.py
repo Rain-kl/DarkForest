@@ -6,14 +6,18 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 
+# Will be overridden dynamically in the API endpoint
+DEFAULT_PASSCODE_MIN = 4
+
+
 class RoomCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
-    passcode: str = Field(..., min_length=4, max_length=20)
+    passcode: str = Field(..., min_length=1, max_length=20)
     nickname: str = Field("Anonymous", max_length=50)
 
 
 class RoomJoin(BaseModel):
-    passcode: str = Field(..., min_length=4, max_length=20)
+    passcode: str = Field(..., min_length=1, max_length=20)
     nickname: str = Field("Anonymous", max_length=50)
 
 

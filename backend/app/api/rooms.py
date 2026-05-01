@@ -8,8 +8,10 @@ from sqlalchemy import select
 
 from app.api.deps import DBSession
 from app.config import get_settings
+from app.models.message import Message
 from app.models.room import Room
 from app.models.system_config import SystemConfig
+from app.schemas.message import MessageResponse
 from app.schemas.room import RoomCreate, RoomJoin, RoomResponse
 from app.services.rate_limiter import check_rate_limit, log_action
 
@@ -24,10 +26,22 @@ def _get_client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+async def _get_passcode_min_length(db) -> int:
+    return await _get_config_int(db, "passcode_min_length", 4)
+
+
 @router.post("", response_model=RoomResponse, status_code=status.HTTP_201_CREATED)
 async def create_room(body: RoomCreate, request: Request, db: DBSession):
     """Create a new chat room."""
     ip = _get_client_ip(request)
+
+    # Dynamic passcode min length check
+    min_len = await _get_passcode_min_length(db)
+    if len(body.passcode) < min_len:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"口令长度至少为 {min_len} 位",
+        )
 
     # Rate limit check
     allowed, count = await check_rate_limit(db, ip, "create_room", "max_rooms_per_hour")
@@ -81,6 +95,14 @@ async def create_room(body: RoomCreate, request: Request, db: DBSession):
 async def join_room(body: RoomJoin, request: Request, db: DBSession):
     """Join an existing room by passcode."""
     ip = _get_client_ip(request)
+
+    # Dynamic passcode min length check
+    min_len = await _get_passcode_min_length(db)
+    if len(body.passcode) < min_len:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"口令长度至少为 {min_len} 位",
+        )
 
     # Rate limit check
     allowed, count = await check_rate_limit(db, ip, "join_room", "max_joins_per_hour")
@@ -138,6 +160,25 @@ async def get_room(room_id: UUID, db: DBSession):
         created_at=room.created_at,
         online_count=manager.get_online_count(str(room.id)),
     )
+
+
+@router.get("/{room_id}/messages", response_model=list[MessageResponse])
+async def get_room_messages(room_id: UUID, db: DBSession, limit: int = 50):
+    """Get recent messages from a room (for history sync)."""
+    result = await db.execute(select(Room).where(Room.id == room_id))
+    room = result.scalar_one_or_none()
+    if not room or room.status not in ("active", "pending_destroy"):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Room not found")
+
+    result = await db.execute(
+        select(Message)
+        .where(Message.room_id == room_id)
+        .order_by(Message.created_at.desc())
+        .limit(limit)
+    )
+    messages = result.scalars().all()
+    # Return in chronological order
+    return list(reversed(messages))
 
 
 @router.get("", response_model=list[RoomResponse])

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Navigate } from "react-router-dom";
 import {
   LayoutDashboard,
   DoorOpen,
@@ -16,7 +16,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
 import { useTheme } from "@/hooks/useTheme";
 import { api, ApiError } from "@/lib/api";
 import type { RoomSummary, SystemStats, ConfigResponse } from "@/types";
@@ -34,9 +33,10 @@ export default function AdminPage() {
   const navigate = useNavigate();
 
   const token = localStorage.getItem("df_token");
+
+  // Redirect to login if no token — using component, not imperative navigate
   if (!token) {
-    navigate("/admin/login");
-    return null;
+    return <Navigate to="/admin/login" replace />;
   }
 
   const fetchStats = async () => {
@@ -46,7 +46,7 @@ export default function AdminPage() {
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) {
         localStorage.removeItem("df_token");
-        navigate("/admin/login");
+        navigate("/admin/login", { replace: true });
       }
     }
   };

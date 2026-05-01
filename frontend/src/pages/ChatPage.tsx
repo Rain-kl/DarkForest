@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { useParams, useSearchParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate } from "react-router-dom";
 import {
   Send,
   ArrowLeft,
@@ -13,8 +13,8 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { useWebSocket } from "@/hooks/useWebSocket";
-import { api, ApiError } from "@/lib/api";
-import type { Room, WSMessage } from "@/types";
+import { api, ApiError, getCookie } from "@/lib/api";
+import type { Room, WSMessage, MessageResponse } from "@/types";
 
 interface ChatMessage {
   id: string;
@@ -26,19 +26,20 @@ interface ChatMessage {
 
 export default function ChatPage() {
   const { roomId } = useParams<{ roomId: string }>();
-  const [searchParams] = useSearchParams();
-  const nickname = searchParams.get("nickname") || "Anonymous";
+  const nickname = getCookie("df_nickname") || "Anonymous";
   const navigate = useNavigate();
 
   const [room, setRoom] = useState<Room | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [onlineCount, setOnlineCount] = useState(0);
-  const [error, setError] = useState("");
+  const [pageError, setPageError] = useState("");
+  const [historyLoaded, setHistoryLoaded] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  // Only construct wsUrl after history is loaded and room exists
   const wsUrl =
-    roomId && room
+    roomId && room && historyLoaded
       ? `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/ws/${roomId}?nickname=${encodeURIComponent(nickname)}`
       : null;
 
@@ -56,7 +57,6 @@ export default function ChatPage() {
       setOnlineCount(msg.online_count);
     }
 
-    // If room is being destroyed, show alert
     if (msg.type === "system" && msg.content.includes("destroyed")) {
       setTimeout(() => navigate("/"), 3000);
     }
@@ -64,19 +64,39 @@ export default function ChatPage() {
 
   const { isConnected, send, disconnect } = useWebSocket(wsUrl, {
     onMessage: handleMessage,
-    onError: () => setError("连接中断，尝试重连中..."),
+    onError: () => setPageError("连接中断，尝试重连中..."),
   });
 
-  // Fetch room info
+  // Fetch room info + history, then enable WS
   useEffect(() => {
     if (!roomId) return;
-    api
-      .get<Room>(`/api/rooms/${roomId}`)
-      .then(setRoom)
-      .catch((e) => {
-        if (e instanceof ApiError) setError(e.detail);
-        else setError("无法加载房间信息");
-      });
+
+    (async () => {
+      try {
+        const [roomData, history] = await Promise.all([
+          api.get<Room>(`/api/rooms/${roomId}`),
+          api.get<MessageResponse[]>(`/api/rooms/${roomId}/messages?limit=50`),
+        ]);
+        setRoom(roomData);
+
+        // Convert history to ChatMessage format
+        const historyMsgs: ChatMessage[] = history.map((m) => ({
+          id: m.id,
+          type: "message" as const,
+          content: m.content,
+          nickname: m.nickname,
+          timestamp: m.created_at,
+        }));
+        setMessages(historyMsgs);
+        setHistoryLoaded(true);
+      } catch (e) {
+        if (e instanceof ApiError) {
+          setPageError(e.detail);
+        } else {
+          setPageError("无法加载房间信息");
+        }
+      }
+    })();
   }, [roomId]);
 
   // Auto-scroll to bottom
@@ -103,12 +123,13 @@ export default function ChatPage() {
     navigate("/");
   };
 
-  if (error && !room) {
+  // Show error page with back button
+  if (pageError && !room) {
     return (
       <div className="min-h-screen flex items-center justify-center p-4">
         <div className="text-center space-y-4">
           <AlertTriangle className="h-12 w-12 text-destructive mx-auto" />
-          <p className="text-lg text-muted-foreground">{error}</p>
+          <p className="text-lg text-muted-foreground">{pageError}</p>
           <Button onClick={() => navigate("/")}>返回主页</Button>
         </div>
       </div>

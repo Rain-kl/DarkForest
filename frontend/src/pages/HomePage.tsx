@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useTheme } from "@/hooks/useTheme";
-import { api, ApiError } from "@/lib/api";
+import { api, ApiError, setCookie } from "@/lib/api";
 import type { Room } from "@/types";
 
 export default function HomePage() {
@@ -19,20 +19,24 @@ export default function HomePage() {
   const { theme, toggleTheme } = useTheme();
   const navigate = useNavigate();
 
+  const resolveNickname = () => nickname.trim() || "Anonymous";
+
   const handleCreate = async () => {
     if (!passcode.trim()) {
       setError("请输入口令");
       return;
     }
+    const nick = resolveNickname();
+    setCookie("df_nickname", nick);
     setLoading(true);
     setError("");
     try {
       const room = await api.post<Room>("/api/rooms", {
         name: roomName.trim() || "匿名聊天室",
         passcode: passcode.trim(),
-        nickname: nickname.trim() || "Anonymous",
+        nickname: nick,
       });
-      navigate(`/room/${room.id}?nickname=${encodeURIComponent(nickname.trim() || "Anonymous")}`);
+      navigate(`/room/${room.id}`);
     } catch (e) {
       if (e instanceof ApiError) {
         setError(e.detail);
@@ -49,14 +53,16 @@ export default function HomePage() {
       setError("请输入口令");
       return;
     }
+    const nick = resolveNickname();
+    setCookie("df_nickname", nick);
     setLoading(true);
     setError("");
     try {
       const room = await api.post<Room>("/api/rooms/join", {
         passcode: passcode.trim(),
-        nickname: nickname.trim() || "Anonymous",
+        nickname: nick,
       });
-      navigate(`/room/${room.id}?nickname=${encodeURIComponent(nickname.trim() || "Anonymous")}`);
+      navigate(`/room/${room.id}`);
     } catch (e) {
       if (e instanceof ApiError) {
         setError(e.detail);
@@ -136,7 +142,7 @@ export default function HomePage() {
                 <Label htmlFor="passcode">口令 *</Label>
                 <Input
                   id="passcode"
-                  placeholder="输入4-20位口令"
+                  placeholder="输入口令"
                   value={passcode}
                   onChange={(e) => setPasscode(e.target.value)}
                   maxLength={20}
