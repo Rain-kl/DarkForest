@@ -25,19 +25,19 @@ services:
       DATABASE_URL: postgresql+asyncpg://darkforest:darkforest@db:5432/darkforest
       CORS_ORIGINS: '["http://localhost","http://localhost:80"]'
     ports:
-      - "8000:8000"
+      - "8000"
     depends_on:
       db:
         condition: service_healthy
 
   frontend:
     build:
-      context: .
-      dockerfile: frontend/Dockerfile
+      context: ./frontend
+      dockerfile: Dockerfile
     volumes:
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
     ports:
-      - "80:80"
+      - "5080:80"
     depends_on:
       - backend
 
