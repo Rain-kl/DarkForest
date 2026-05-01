@@ -16,9 +16,6 @@ class Settings(BaseSettings):
     # Database
     DATABASE_URL: str = "postgresql+asyncpg://darkforest:darkforest@localhost:5432/darkforest"
 
-    # Redis
-    REDIS_URL: str = "redis://localhost:6379/0"
-
     # JWT
     JWT_SECRET_KEY: str = "change-me-in-production-use-a-strong-secret"
     JWT_ALGORITHM: str = "HS256"
