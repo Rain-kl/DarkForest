@@ -1,5 +1,7 @@
 FROM python:3.12-slim
 
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
 WORKDIR /app
 
 # Install system dependencies
@@ -7,9 +9,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install Python dependencies via uv
+COPY pyproject.toml .
+RUN uv sync --no-cache
 
 # Copy application code
 COPY . .
