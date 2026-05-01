@@ -19,11 +19,14 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    env_file:
-      - ./backend/.env
     environment:
       DATABASE_URL: postgresql+asyncpg://darkforest:darkforest@db:5432/darkforest
-      CORS_ORIGINS: '["http://localhost","http://localhost:80"]'
+      CORS_ORIGINS: '["http://localhost","http://localhost:5080"]'
+      JWT_SECRET_KEY: change-me-to-a-strong-random-secret-in-production
+      JWT_ACCESS_TOKEN_EXPIRE_MINUTES: "1440"
+      ADMIN_USERNAME: admin
+      ADMIN_PASSWORD: admin123456
+      
     ports:
       - "8000"
     depends_on:
