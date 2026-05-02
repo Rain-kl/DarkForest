@@ -14,9 +14,10 @@ from app.api.rooms import router as rooms_router
 from app.api.websocket import router as ws_router
 from app.config import get_settings
 from app.database import async_session_factory
-from app.migration import MigrationManager
+from app.migrate.migration_manager import MigrationManager
 from app.models.base import Base
 from app.database import engine
+from app.models.version import AppVersion  # noqa: F401
 
 settings = get_settings()
 
@@ -148,7 +149,8 @@ async def lifespan(app: FastAPI):
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Database tables created")
     await _ensure_room_passcode_indexes()
-    await MigrationManager(engine).migrate()
+    migration_manager = await MigrationManager.create(engine)
+    await migration_manager.migrate()
     # Initialize admin and configs
     await _init_admin()
     await _init_default_configs()
