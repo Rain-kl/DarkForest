@@ -14,7 +14,7 @@ from app.models.message import Message
 from app.models.room import Room
 from app.schemas.message import WSMessage
 from app.services.connection_manager import manager
-from app.services.rate_limiter import check_rate_limit
+from app.services.rate_limiter import check_rate_limit, log_action
 
 router = APIRouter(tags=["websocket"])
 
@@ -111,6 +111,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     nickname=nickname,
                 )
                 db.add(message)
+                await log_action(db, ip, "send_message")
 
                 # Update room activity
                 result = await db.execute(select(Room).where(Room.id == UUID(room_id)))

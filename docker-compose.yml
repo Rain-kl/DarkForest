@@ -8,7 +8,7 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U darkforest"]
       interval: 5s
@@ -40,9 +40,20 @@ services:
     volumes:
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
     ports:
-      - "5080:80"
+      - "80"
     depends_on:
       - backend
+  anubis:
+    image: ghcr.io/rain-kl/anubis:latest
+    ports:
+      - "55080:8923"
+    environment:
+      # 反代地址
+      TARGET: "http://frontend:80"
+      AUTH_MODE: "pow"
+      VALID_MODE: "jwt"
+      DIFFICULTY: "6"
+      DEFAULT_FALLBACK_ACTION: "CHALLENGE"
 
 volumes:
   pgdata:

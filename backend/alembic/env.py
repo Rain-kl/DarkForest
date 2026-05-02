@@ -15,7 +15,6 @@ from app.models.user import User  # noqa: F401
 from app.models.room import Room  # noqa: F401
 from app.models.message import Message  # noqa: F401
 from app.models.system_config import SystemConfig  # noqa: F401
-from app.models.rate_limit_log import RateLimitLog  # noqa: F401
 
 config = context.config
 settings = get_settings()

@@ -1,11 +1,13 @@
-"""IP-based rate limiting service using database logs."""
+"""IP-based in-memory rate limiting service."""
 
-from datetime import UTC, datetime, timedelta
+import asyncio
+from collections import defaultdict, deque
+from datetime import timedelta
+from time import time
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.rate_limit_log import RateLimitLog
 from app.models.system_config import SystemConfig
 
 # Default limits (used when no dynamic config exists)
@@ -14,6 +16,9 @@ DEFAULT_LIMITS: dict[str, int] = {
     "max_joins_per_hour": 10,
     "max_messages_per_minute": 30,
 }
+
+_rate_limit_lock = asyncio.Lock()
+_rate_limit_hits: dict[tuple[str, str], deque[float]] = defaultdict(deque)
 
 
 async def get_config_value(db: AsyncSession, key: str) -> int:
@@ -41,33 +46,40 @@ async def check_rate_limit(
     window_hours: use 1/60 for a 1-minute window, 1 for 1-hour window.
     """
     limit = await get_config_value(db, config_key)
-    cutoff = datetime.now(UTC) - timedelta(hours=window_hours)
+    cutoff = time() - window_hours * 3600
+    key = (ip_address, action)
 
-    result = await db.execute(
-        select(func.count())
-        .select_from(RateLimitLog)
-        .where(
-            RateLimitLog.ip_address == ip_address,
-            RateLimitLog.action == action,
-            RateLimitLog.created_at >= cutoff,
-        )
-    )
-    count = result.scalar() or 0
-    return count < limit, count
+    async with _rate_limit_lock:
+        hits = _rate_limit_hits[key]
+        while hits and hits[0] < cutoff:
+            hits.popleft()
+        count = len(hits)
+        return count < limit, count
 
 
 async def log_action(db: AsyncSession, ip_address: str, action: str) -> None:
-    """Record an action for rate limiting."""
-    entry = RateLimitLog(
-        ip_address=ip_address,
-        action=action,
-        created_at=datetime.now(UTC),
-    )
-    db.add(entry)
+    """Record an action in process memory for rate limiting."""
+    _ = db
+    async with _rate_limit_lock:
+        _rate_limit_hits[(ip_address, action)].append(time())
 
 
 async def cleanup_old_logs(db: AsyncSession, hours: int = 48) -> int:
-    """Remove rate limit logs older than the given hours."""
-    cutoff = datetime.now(UTC) - timedelta(hours=hours)
-    result = await db.execute(delete(RateLimitLog).where(RateLimitLog.created_at < cutoff))
-    return result.rowcount
+    """Remove old in-memory rate limit entries."""
+    _ = db
+    cutoff = time() - timedelta(hours=hours).total_seconds()
+    removed = 0
+
+    async with _rate_limit_lock:
+        empty_keys: list[tuple[str, str]] = []
+        for key, hits in _rate_limit_hits.items():
+            before = len(hits)
+            while hits and hits[0] < cutoff:
+                hits.popleft()
+            removed += before - len(hits)
+            if not hits:
+                empty_keys.append(key)
+        for key in empty_keys:
+            del _rate_limit_hits[key]
+
+    return removed
