@@ -6,6 +6,9 @@ import {
   DoorOpen,
   Settings,
   Users,
+  UserPlus,
+  Pencil,
+  KeyRound,
   Trash2,
   RefreshCw,
   RotateCcw,
@@ -29,10 +32,35 @@ import {
 } from "@/components/ui/dialog";
 import { useTheme } from "@/hooks/useTheme";
 import { api, ApiError } from "@/lib/api";
-import type { RoomSummary, SystemStats, ConfigResponse, MessageResponse } from "@/types";
+import type {
+  RoomSummary,
+  SystemStats,
+  ConfigResponse,
+  MessageResponse,
+  UserCreateRequest,
+  UserResponse,
+  UserUpdateRequest,
+} from "@/types";
 
-type Tab = "dashboard" | "rooms" | "config";
+type Tab = "dashboard" | "rooms" | "users" | "config";
 type RoomStatusTab = "active" | "pending";
+type UserFormState = {
+  username: string;
+  email: string;
+  password: string;
+  nickname: string;
+  role: "admin" | "user";
+  is_active: boolean;
+};
+
+const emptyUserForm: UserFormState = {
+  username: "",
+  email: "",
+  password: "",
+  nickname: "",
+  role: "user",
+  is_active: true,
+};
 
 export default function AdminPage() {
   const [tab, setTab] = useState<Tab>("dashboard");
@@ -43,6 +71,13 @@ export default function AdminPage() {
   const [messageRoom, setMessageRoom] = useState<RoomSummary | null>(null);
   const [messageDialogOpen, setMessageDialogOpen] = useState(false);
   const [configs, setConfigs] = useState<ConfigResponse[]>([]);
+  const [users, setUsers] = useState<UserResponse[]>([]);
+  const [userForm, setUserForm] = useState<UserFormState>(emptyUserForm);
+  const [editingUser, setEditingUser] = useState<UserResponse | null>(null);
+  const [userDialogOpen, setUserDialogOpen] = useState(false);
+  const [passwordUser, setPasswordUser] = useState<UserResponse | null>(null);
+  const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const { theme, toggleTheme } = useTheme();
@@ -83,6 +118,15 @@ export default function AdminPage() {
     try {
       const data = await api.get<ConfigResponse[]>("/api/admin/configs");
       setConfigs(data);
+    } catch (e) {
+      if (e instanceof ApiError) setError(e.detail);
+    }
+  };
+
+  const fetchUsers = async () => {
+    try {
+      const data = await api.get<UserResponse[]>("/api/admin/users");
+      setUsers(data);
     } catch (e) {
       if (e instanceof ApiError) setError(e.detail);
     }
@@ -154,6 +198,86 @@ export default function AdminPage() {
     }
   };
 
+  const openCreateUser = () => {
+    setEditingUser(null);
+    setUserForm(emptyUserForm);
+    setUserDialogOpen(true);
+  };
+
+  const openEditUser = (user: UserResponse) => {
+    setEditingUser(user);
+    setUserForm({
+      username: user.username,
+      email: user.email,
+      password: "",
+      nickname: user.nickname || "",
+      role: user.role === "admin" ? "admin" : "user",
+      is_active: user.is_active,
+    });
+    setUserDialogOpen(true);
+  };
+
+  const saveUser = async () => {
+    setError("");
+    try {
+      if (editingUser) {
+        const payload: UserUpdateRequest = {
+          email: userForm.email,
+          nickname: userForm.nickname || null,
+          role: userForm.role,
+          is_active: userForm.is_active,
+        };
+        await api.put<UserResponse>(`/api/admin/users/${editingUser.id}`, payload);
+      } else {
+        const payload: UserCreateRequest = {
+          username: userForm.username,
+          email: userForm.email,
+          password: userForm.password,
+          nickname: userForm.nickname || null,
+          role: userForm.role,
+          is_active: userForm.is_active,
+        };
+        await api.post<UserResponse>("/api/admin/users", payload);
+      }
+      setUserDialogOpen(false);
+      await fetchUsers();
+      await fetchStats();
+    } catch (e) {
+      if (e instanceof ApiError) setError(e.detail);
+    }
+  };
+
+  const openPasswordDialog = (user: UserResponse) => {
+    setPasswordUser(user);
+    setNewPassword("");
+    setPasswordDialogOpen(true);
+  };
+
+  const savePassword = async () => {
+    if (!passwordUser) return;
+    setError("");
+    try {
+      await api.put<UserResponse>(`/api/admin/users/${passwordUser.id}/password`, {
+        password: newPassword,
+      });
+      setPasswordDialogOpen(false);
+    } catch (e) {
+      if (e instanceof ApiError) setError(e.detail);
+    }
+  };
+
+  const deleteUser = async (user: UserResponse) => {
+    if (!confirm(`确定要删除用户 ${user.username} 吗？`)) return;
+    setError("");
+    try {
+      await api.del(`/api/admin/users/${user.id}`);
+      await fetchUsers();
+      await fetchStats();
+    } catch (e) {
+      if (e instanceof ApiError) setError(e.detail);
+    }
+  };
+
   const handleLogout = () => {
     localStorage.removeItem("df_token");
     navigate("/");
@@ -163,6 +287,7 @@ export default function AdminPage() {
     fetchStats();
     fetchRooms();
     fetchConfigs();
+    fetchUsers();
   }, []);
 
   const activeRooms = rooms.filter((room) => room.status === "active");
@@ -196,6 +321,7 @@ export default function AdminPage() {
           {[
             { key: "dashboard" as Tab, icon: LayoutDashboard, label: "仪表盘" },
             { key: "rooms" as Tab, icon: DoorOpen, label: "空间管理" },
+            { key: "users" as Tab, icon: Users, label: "用户管理" },
             { key: "config" as Tab, icon: Settings, label: "系统配置" },
           ].map(({ key, icon: Icon, label }) => (
             <Button
@@ -368,6 +494,161 @@ export default function AdminPage() {
                     {messages.length === 0 && (
                       <p className="text-center text-sm text-muted-foreground py-6">暂无对话内容</p>
                     )}
+                  </div>
+                </DialogContent>
+              </Dialog>
+            </div>
+          )}
+
+          {/* Users */}
+          {tab === "users" && (
+            <div className="space-y-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <h2 className="text-xl font-bold">用户管理</h2>
+                <div className="flex gap-2">
+                  <Button variant="outline" size="icon" onClick={fetchUsers} title="刷新">
+                    <RefreshCw className="h-4 w-4" />
+                  </Button>
+                  <Button size="sm" onClick={openCreateUser}>
+                    <UserPlus className="mr-1 h-4 w-4" />
+                    新增用户
+                  </Button>
+                </div>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+                {users.map((user) => (
+                  <Card key={user.id} className="overflow-hidden">
+                    <CardContent className="space-y-3 p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="break-words font-semibold leading-7">{user.username}</p>
+                          <p className="break-words text-xs text-muted-foreground">{user.email}</p>
+                        </div>
+                        <Badge variant={user.is_active ? "default" : "outline"} className="shrink-0">
+                          {user.is_active ? "启用" : "停用"}
+                        </Badge>
+                      </div>
+                      <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                        <span>昵称: {user.nickname || "-"}</span>
+                        <span>角色: {user.role === "admin" ? "管理员" : "普通用户"}</span>
+                      </div>
+                      <div className="flex flex-wrap gap-2 pt-1">
+                        <Button variant="outline" size="sm" onClick={() => openEditUser(user)}>
+                          <Pencil className="mr-1 h-4 w-4" />
+                          修改
+                        </Button>
+                        <Button variant="secondary" size="sm" onClick={() => openPasswordDialog(user)}>
+                          <KeyRound className="mr-1 h-4 w-4" />
+                          密码
+                        </Button>
+                        <Button variant="destructive" size="sm" onClick={() => deleteUser(user)}>
+                          <Trash2 className="mr-1 h-4 w-4" />
+                          删除
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+                {users.length === 0 && (
+                  <p className="col-span-full text-center text-muted-foreground py-8">暂无用户</p>
+                )}
+              </div>
+
+              <Dialog open={userDialogOpen} onOpenChange={setUserDialogOpen}>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>{editingUser ? "修改用户" : "新增用户"}</DialogTitle>
+                    <DialogDescription>
+                      {editingUser ? "修改用户资料、状态和角色" : "创建后台用户并分配角色"}
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <label className="space-y-1 text-sm">
+                      <span>用户名</span>
+                      <Input
+                        value={userForm.username}
+                        disabled={Boolean(editingUser)}
+                        onChange={(e) => setUserForm({ ...userForm, username: e.target.value })}
+                      />
+                    </label>
+                    <label className="space-y-1 text-sm">
+                      <span>邮箱</span>
+                      <Input
+                        value={userForm.email}
+                        onChange={(e) => setUserForm({ ...userForm, email: e.target.value })}
+                      />
+                    </label>
+                    {!editingUser && (
+                      <label className="space-y-1 text-sm">
+                        <span>密码</span>
+                        <Input
+                          type="password"
+                          value={userForm.password}
+                          onChange={(e) => setUserForm({ ...userForm, password: e.target.value })}
+                        />
+                      </label>
+                    )}
+                    <label className="space-y-1 text-sm">
+                      <span>昵称</span>
+                      <Input
+                        value={userForm.nickname}
+                        onChange={(e) => setUserForm({ ...userForm, nickname: e.target.value })}
+                      />
+                    </label>
+                    <label className="space-y-1 text-sm">
+                      <span>角色</span>
+                      <select
+                        value={userForm.role}
+                        onChange={(e) =>
+                          setUserForm({ ...userForm, role: e.target.value as "admin" | "user" })
+                        }
+                        className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                      >
+                        <option value="user">普通用户</option>
+                        <option value="admin">管理员</option>
+                      </select>
+                    </label>
+                    <label className="flex items-center gap-2 pt-7 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={userForm.is_active}
+                        onChange={(e) => setUserForm({ ...userForm, is_active: e.target.checked })}
+                        className="h-4 w-4"
+                      />
+                      启用账号
+                    </label>
+                  </div>
+                  <div className="flex justify-end gap-2">
+                    <Button variant="outline" onClick={() => setUserDialogOpen(false)}>
+                      取消
+                    </Button>
+                    <Button onClick={saveUser}>保存</Button>
+                  </div>
+                </DialogContent>
+              </Dialog>
+
+              <Dialog open={passwordDialogOpen} onOpenChange={setPasswordDialogOpen}>
+                <DialogContent className="max-w-md">
+                  <DialogHeader>
+                    <DialogTitle>修改密码</DialogTitle>
+                    <DialogDescription>
+                      为用户 {passwordUser?.username || "-"} 设置新密码
+                    </DialogDescription>
+                  </DialogHeader>
+                  <label className="space-y-1 text-sm">
+                    <span>新密码</span>
+                    <Input
+                      type="password"
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                    />
+                  </label>
+                  <div className="flex justify-end gap-2">
+                    <Button variant="outline" onClick={() => setPasswordDialogOpen(false)}>
+                      取消
+                    </Button>
+                    <Button onClick={savePassword}>保存</Button>
                   </div>
                 </DialogContent>
               </Dialog>

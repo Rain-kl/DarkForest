@@ -14,8 +14,9 @@ from app.models.user import User
 from app.schemas.config import ConfigResponse, ConfigUpdate, SystemStats
 from app.schemas.message import MessageResponse, WSMessage
 from app.schemas.room import RoomSummary
-from app.schemas.user import UserResponse
+from app.schemas.user import UserCreate, UserPasswordUpdate, UserResponse, UserUpdate
 from app.services.connection_manager import manager
+from app.services.auth import hash_password
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -200,12 +201,121 @@ async def list_users(db: DBSession, _: AdminUser):
     return result.scalars().all()
 
 
-@router.put("/users/{user_id}/toggle-active", response_model=UserResponse)
-async def toggle_user_active(user_id: UUID, db: DBSession, _: AdminUser):
+async def _admin_count(db: DBSession) -> int:
+    result = await db.execute(
+        select(func.count()).select_from(User).where(User.role == "admin", User.is_active)
+    )
+    return result.scalar() or 0
+
+
+@router.post("/users", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+async def create_user(body: UserCreate, db: DBSession, _: AdminUser):
+    existing = await db.execute(
+        select(User).where((User.username == body.username) | (User.email == body.email))
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Username or email already exists",
+        )
+
+    user = User(
+        username=body.username,
+        email=str(body.email),
+        hashed_password=hash_password(body.password),
+        nickname=body.nickname or body.username,
+        role=body.role,
+        is_active=body.is_active,
+    )
+    db.add(user)
+    await db.flush()
+    return user
+
+
+@router.put("/users/{user_id}", response_model=UserResponse)
+async def update_user(user_id: UUID, body: UserUpdate, db: DBSession, current_user: AdminUser):
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    existing = await db.execute(
+        select(User).where(User.email == body.email, User.id != user_id)
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already exists")
+
+    demoting_self = user.id == current_user.id and body.role != "admin"
+    disabling_self = user.id == current_user.id and not body.is_active
+    removes_active_admin = user.role == "admin" and user.is_active and (
+        body.role != "admin" or not body.is_active
+    )
+    removing_last_admin = removes_active_admin and await _admin_count(db) <= 1
+    if demoting_self or disabling_self or removing_last_admin:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot remove the last active admin or disable your own admin access",
+        )
+
+    user.email = str(body.email)
+    user.nickname = body.nickname or user.username
+    user.role = body.role
+    user.is_active = body.is_active
+    await db.flush()
+    return user
+
+
+@router.put("/users/{user_id}/password", response_model=UserResponse)
+async def update_user_password(
+    user_id: UUID, body: UserPasswordUpdate, db: DBSession, _: AdminUser
+):
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    user.hashed_password = hash_password(body.password)
+    await db.flush()
+    return user
+
+
+@router.delete("/users/{user_id}", status_code=status.HTTP_200_OK)
+async def delete_user(user_id: UUID, db: DBSession, current_user: AdminUser):
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    if user.id == current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot delete your own account",
+        )
+    if user.role == "admin" and user.is_active and await _admin_count(db) <= 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot delete the last active admin",
+        )
+
+    await db.delete(user)
+    await db.flush()
+    return {"detail": "User deleted successfully"}
+
+
+@router.put("/users/{user_id}/toggle-active", response_model=UserResponse)
+async def toggle_user_active(user_id: UUID, db: DBSession, current_user: AdminUser):
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    if user.id == current_user.id and user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot disable your own account",
+        )
+    if user.role == "admin" and user.is_active and await _admin_count(db) <= 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot disable the last active admin",
+        )
     user.is_active = not user.is_active
     await db.flush()
     return user

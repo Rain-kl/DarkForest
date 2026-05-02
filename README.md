@@ -68,7 +68,7 @@ cp backend/.env.example backend/.env
 docker compose up -d
 
 # 访问 http://localhost
-# 管理后台 http://localhost/admin/login
+# 管理后台 http://localhost/admin
 ```
 
 ### 本地开发

@@ -17,7 +17,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 @router.post("/login", response_model=TokenResponse)
 async def login(body: UserLogin, db: DBSession):
     result = await db.execute(select(User).where(User.username == body.username))
-    user = result.scalar_one_or_none()
+    user: User | None = result.scalar_one_or_none()
     if user is None or not verify_password(body.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -27,6 +27,11 @@ async def login(body: UserLogin, db: DBSession):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Account is disabled",
+        )
+    if user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admin users can log in",
         )
     token = create_access_token({"sub": str(user.id), "role": user.role})
     return TokenResponse(access_token=token)

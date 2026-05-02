@@ -65,3 +65,19 @@ export interface UserResponse {
   role: string;
   is_active: boolean;
 }
+
+export interface UserCreateRequest {
+  username: string;
+  email: string;
+  password: string;
+  nickname: string | null;
+  role: "admin" | "user";
+  is_active: boolean;
+}
+
+export interface UserUpdateRequest {
+  email: string;
+  nickname: string | null;
+  role: "admin" | "user";
+  is_active: boolean;
+}

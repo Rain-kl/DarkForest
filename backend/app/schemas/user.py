@@ -17,6 +17,26 @@ class UserRegister(BaseModel):
     nickname: str | None = Field(None, max_length=100)
 
 
+class UserCreate(BaseModel):
+    username: str = Field(..., min_length=3, max_length=50)
+    email: EmailStr
+    password: str = Field(..., min_length=6, max_length=100)
+    nickname: str | None = Field(None, max_length=100)
+    role: str = Field("user", pattern="^(admin|user)$")
+    is_active: bool = True
+
+
+class UserUpdate(BaseModel):
+    email: EmailStr
+    nickname: str | None = Field(None, max_length=100)
+    role: str = Field(..., pattern="^(admin|user)$")
+    is_active: bool
+
+
+class UserPasswordUpdate(BaseModel):
+    password: str = Field(..., min_length=6, max_length=100)
+
+
 class UserResponse(BaseModel):
     id: UUID
     username: str
