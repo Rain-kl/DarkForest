@@ -40,6 +40,7 @@ class RoomSummary(BaseModel):
     name: str
     status: str
     creator_ip: str
+    passcode: str = ""
     online_count: int = 0
     message_count: int = 0
     last_activity_at: datetime

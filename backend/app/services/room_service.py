@@ -101,9 +101,8 @@ async def destroy_pending_rooms(db: AsyncSession) -> int:
 
     count = 0
     for room in rooms:
-        # Delete messages first
         await db.execute(delete(Message).where(Message.room_id == room.id))
-        room.status = "destroyed"
+        await db.delete(room)
         count += 1
 
     await db.flush()

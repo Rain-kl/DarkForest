@@ -15,6 +15,7 @@ export interface RoomSummary {
   name: string;
   status: string;
   creator_ip: string;
+  passcode: string;
   online_count: number;
   message_count: number;
   last_activity_at: string;

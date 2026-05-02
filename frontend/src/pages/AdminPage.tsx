@@ -2,30 +2,46 @@ import { useState, useEffect } from "react";
 import { useNavigate, Navigate } from "react-router-dom";
 import {
   LayoutDashboard,
+  Archive,
   DoorOpen,
   Settings,
   Users,
   Trash2,
   RefreshCw,
+  RotateCcw,
   ArrowLeft,
+  Eye,
+  MessageSquareText,
   Moon,
   Sun,
   LogOut,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useTheme } from "@/hooks/useTheme";
 import { api, ApiError } from "@/lib/api";
-import type { RoomSummary, SystemStats, ConfigResponse } from "@/types";
+import type { RoomSummary, SystemStats, ConfigResponse, MessageResponse } from "@/types";
 
 type Tab = "dashboard" | "rooms" | "config";
+type RoomStatusTab = "active" | "pending";
 
 export default function AdminPage() {
   const [tab, setTab] = useState<Tab>("dashboard");
+  const [roomStatusTab, setRoomStatusTab] = useState<RoomStatusTab>("active");
   const [stats, setStats] = useState<SystemStats | null>(null);
   const [rooms, setRooms] = useState<RoomSummary[]>([]);
+  const [messages, setMessages] = useState<MessageResponse[]>([]);
+  const [messageRoom, setMessageRoom] = useState<RoomSummary | null>(null);
+  const [messageDialogOpen, setMessageDialogOpen] = useState(false);
   const [configs, setConfigs] = useState<ConfigResponse[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -72,12 +88,58 @@ export default function AdminPage() {
     }
   };
 
+  const viewMessages = async (room: RoomSummary) => {
+    setError("");
+    try {
+      const data = await api.get<MessageResponse[]>(
+        `/api/admin/rooms/${room.id}/messages?limit=100`
+      );
+      setMessageRoom(room);
+      setMessages(data);
+      setMessageDialogOpen(true);
+    } catch (e) {
+      if (e instanceof ApiError) setError(e.detail);
+    }
+  };
+
+  const archiveRoom = async (roomId: string) => {
+    if (!confirm("确定要归档这个空间吗？归档后会进入待销毁列表。")) return;
+    try {
+      await api.post(`/api/admin/rooms/${roomId}/archive`);
+      await fetchRooms();
+      await fetchStats();
+      if (messageRoom?.id === roomId) {
+        setMessageRoom((room) => (room ? { ...room, status: "pending_destroy" } : room));
+      }
+    } catch (e) {
+      if (e instanceof ApiError) setError(e.detail);
+    }
+  };
+
   const destroyRoom = async (roomId: string) => {
-    if (!confirm("确定要销毁这个空间吗？")) return;
+    if (!confirm("确定要彻底销毁这个空间吗？空间和对话数据都会从数据库删除。")) return;
     try {
       await api.post(`/api/admin/rooms/${roomId}/destroy`);
-      fetchRooms();
-      fetchStats();
+      await fetchRooms();
+      await fetchStats();
+      if (messageRoom?.id === roomId) {
+        setMessageDialogOpen(false);
+        setMessageRoom(null);
+        setMessages([]);
+      }
+    } catch (e) {
+      if (e instanceof ApiError) setError(e.detail);
+    }
+  };
+
+  const restoreRoom = async (roomId: string) => {
+    try {
+      await api.post(`/api/admin/rooms/${roomId}/restore`);
+      await fetchRooms();
+      await fetchStats();
+      if (messageRoom?.id === roomId) {
+        setMessageRoom((room) => (room ? { ...room, status: "active" } : room));
+      }
     } catch (e) {
       if (e instanceof ApiError) setError(e.detail);
     }
@@ -102,6 +164,10 @@ export default function AdminPage() {
     fetchRooms();
     fetchConfigs();
   }, []);
+
+  const activeRooms = rooms.filter((room) => room.status === "active");
+  const pendingRooms = rooms.filter((room) => room.status !== "active");
+  const visibleRooms = roomStatusTab === "active" ? activeRooms : pendingRooms;
 
   return (
     <div className="min-h-screen bg-background">
@@ -145,7 +211,7 @@ export default function AdminPage() {
         </nav>
 
         {/* Content */}
-        <main className="flex-1 p-4 sm:p-6 max-w-5xl">
+        <main className="min-w-0 flex-1 p-4 sm:p-6">
           {error && (
             <div className="bg-destructive/10 text-destructive text-sm px-4 py-2 rounded-lg mb-4">
               {error}
@@ -178,62 +244,133 @@ export default function AdminPage() {
           {/* Rooms */}
           {tab === "rooms" && (
             <div className="space-y-4">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <h2 className="text-xl font-bold">空间管理</h2>
-                <Button variant="outline" size="sm" onClick={fetchRooms}>
-                  <RefreshCw className="h-4 w-4 mr-1" />
-                  刷新
-                </Button>
+                <div className="flex items-center gap-2">
+                  <div className="rounded-md border bg-muted/30 p-1">
+                    {[
+                      { key: "active" as RoomStatusTab, label: `活跃 ${activeRooms.length}` },
+                      { key: "pending" as RoomStatusTab, label: `待销毁 ${pendingRooms.length}` },
+                    ].map((item) => (
+                      <Button
+                        key={item.key}
+                        variant={roomStatusTab === item.key ? "secondary" : "ghost"}
+                        size="sm"
+                        className="h-8"
+                        onClick={() => setRoomStatusTab(item.key)}
+                      >
+                        {item.label}
+                      </Button>
+                    ))}
+                  </div>
+                  <Button variant="outline" size="icon" onClick={fetchRooms} title="刷新">
+                    <RefreshCw className="h-4 w-4" />
+                  </Button>
+                </div>
               </div>
-              <div className="space-y-3">
-                {rooms.map((room) => (
-                  <Card key={room.id}>
-                    <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium">{room.name}</span>
-                          <Badge
-                            variant={
-                              room.status === "active"
-                                ? "default"
-                                : room.status === "pending_destroy"
-                                ? "secondary"
-                                : "outline"
-                            }
-                          >
-                            {room.status === "active"
-                              ? "活跃"
+
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+                {visibleRooms.map((room) => (
+                  <Card key={room.id} className="overflow-hidden">
+                    <CardContent className="space-y-3 p-4">
+                      <div className="flex min-h-7 items-start justify-between gap-3">
+                        <span className="min-w-0 break-words font-semibold leading-7">
+                          {room.name}
+                        </span>
+                        <Badge
+                          variant={
+                            room.status === "active"
+                              ? "default"
                               : room.status === "pending_destroy"
-                              ? "待销毁"
-                              : "已销毁"}
-                          </Badge>
-                        </div>
-                        <div className="flex gap-4 text-xs text-muted-foreground">
-                          <span className="flex items-center gap-1">
-                            <Users className="h-3 w-3" />
-                            {room.online_count} 在线
-                          </span>
-                          <span>{room.message_count} 消息</span>
-                          <span>IP: {room.creator_ip}</span>
-                        </div>
-                      </div>
-                      {room.status !== "destroyed" && (
-                        <Button
-                          variant="destructive"
-                          size="sm"
-                          onClick={() => destroyRoom(room.id)}
+                              ? "secondary"
+                              : "outline"
+                          }
+                          className="shrink-0"
                         >
-                          <Trash2 className="h-4 w-4 mr-1" />
-                          销毁
+                          {room.status === "active"
+                            ? "活跃"
+                            : room.status === "pending_destroy"
+                            ? "待销毁"
+                            : "已销毁"}
+                        </Badge>
+                      </div>
+                      <div className="rounded-md bg-muted/60 px-3 py-2 font-mono text-sm">
+                        {room.passcode}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                        <span className="inline-flex items-center gap-1">
+                          <Users className="h-3.5 w-3.5" />
+                          {room.online_count} 在线
+                        </span>
+                        <span>{room.message_count} 消息</span>
+                        <span>IP: {room.creator_ip}</span>
+                      </div>
+                      <div className="flex flex-wrap gap-2 pt-1">
+                        <Button variant="outline" size="sm" onClick={() => viewMessages(room)}>
+                          <Eye className="mr-1 h-4 w-4" />
+                          查看
                         </Button>
-                      )}
+                        {room.status !== "active" && (
+                          <Button variant="secondary" size="sm" onClick={() => restoreRoom(room.id)}>
+                            <RotateCcw className="mr-1 h-4 w-4" />
+                            恢复
+                          </Button>
+                        )}
+                        {room.status === "active" ? (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => archiveRoom(room.id)}
+                          >
+                            <Archive className="mr-1 h-4 w-4" />
+                            归档
+                          </Button>
+                        ) : (
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => destroyRoom(room.id)}
+                          >
+                            <Trash2 className="mr-1 h-4 w-4" />
+                            销毁
+                          </Button>
+                        )}
+                      </div>
                     </CardContent>
                   </Card>
                 ))}
-                {rooms.length === 0 && !loading && (
-                  <p className="text-center text-muted-foreground py-8">暂无空间</p>
+                {visibleRooms.length === 0 && !loading && (
+                  <p className="col-span-full text-center text-muted-foreground py-8">暂无空间</p>
                 )}
               </div>
+
+              <Dialog open={messageDialogOpen} onOpenChange={setMessageDialogOpen}>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle className="flex items-center gap-2">
+                      <MessageSquareText className="h-5 w-5" />
+                      {messageRoom?.name || "空间"} 的对话内容
+                    </DialogTitle>
+                    <DialogDescription>
+                      口令 {messageRoom?.passcode || "-"} · 最近 {messages.length} 条消息
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="max-h-[60vh] space-y-3 overflow-y-auto pr-1">
+                    {messages.map((message) => (
+                      <div key={message.id} className="rounded-md border bg-muted/30 px-3 py-2">
+                        <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                          <span className="font-medium text-foreground">{message.nickname}</span>
+                          <span>{new Date(message.created_at).toLocaleString()}</span>
+                        </div>
+                        <p className="break-words text-sm">{message.content}</p>
+                      </div>
+                    ))}
+                    {messages.length === 0 && (
+                      <p className="text-center text-sm text-muted-foreground py-6">暂无对话内容</p>
+                    )}
+                  </div>
+                </DialogContent>
+              </Dialog>
             </div>
           )}
 

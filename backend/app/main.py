@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
+from sqlalchemy import text
 
 from app.api.admin import router as admin_router
 from app.api.auth import router as auth_router
@@ -52,34 +53,37 @@ async def _init_default_configs() -> None:
     defaults = {
         "room_timeout_minutes": {
             "value": str(settings.DEFAULT_ROOM_TIMEOUT_MINUTES),
-            "description": "Room auto-destroy timeout in minutes of inactivity",
+            "description": "空间无活动后自动销毁的等待时间（分钟）",
         },
         "message_retention_hours": {
             "value": str(settings.DEFAULT_MESSAGE_RETENTION_HOURS),
-            "description": "Hours to retain messages after room destruction",
+            "description": "空间销毁后保留消息的时间（小时）",
         },
         "max_rooms_per_hour": {
             "value": str(settings.DEFAULT_MAX_ROOMS_PER_HOUR),
-            "description": "Max rooms an IP can create per hour",
+            "description": "单个 IP 每小时最多可创建的空间数量",
         },
         "max_joins_per_hour": {
             "value": str(settings.DEFAULT_MAX_JOINS_PER_HOUR),
-            "description": "Max rooms an IP can join per hour",
+            "description": "单个 IP 每小时最多可加入空间的次数",
         },
         "max_messages_per_minute": {
             "value": str(settings.DEFAULT_MAX_MESSAGES_PER_MINUTE),
-            "description": "Max messages an IP can send per minute",
+            "description": "单个 IP 每分钟最多可发送的消息数量",
         },
         "passcode_min_length": {
             "value": "4",
-            "description": "Minimum length for room passcode",
+            "description": "空间访问口令的最小长度",
         },
     }
 
     async with async_session_factory() as db:
         for key, config in defaults.items():
             result = await db.execute(select(SystemConfig).where(SystemConfig.key == key))
-            if not result.scalar_one_or_none():
+            existing = result.scalar_one_or_none()
+            if existing:
+                existing.description = config["description"]
+            else:
                 db.add(
                     SystemConfig(
                         key=key,
@@ -89,6 +93,23 @@ async def _init_default_configs() -> None:
                 )
         await db.commit()
         logger.info("Default configs initialized")
+
+
+async def _ensure_room_passcode_indexes() -> None:
+    """Make old databases allow passcode reuse after rooms are destroyed."""
+    if engine.dialect.name != "postgresql":
+        return
+
+    async with engine.begin() as conn:
+        await conn.execute(text("ALTER TABLE rooms DROP CONSTRAINT IF EXISTS ix_rooms_passcode"))
+        await conn.execute(text("DROP INDEX IF EXISTS ix_rooms_passcode"))
+        await conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_rooms_passcode_active "
+                "ON rooms (passcode) WHERE status != 'destroyed'"
+            )
+        )
+    logger.info("Room passcode indexes verified")
 
 
 async def _background_cleanup() -> None:
@@ -125,6 +146,7 @@ async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Database tables created")
+    await _ensure_room_passcode_indexes()
 
     # Initialize admin and configs
     await _init_admin()

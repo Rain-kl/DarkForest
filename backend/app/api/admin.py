@@ -1,7 +1,6 @@
 """Admin API endpoints – room management, config, stats."""
 
-from datetime import UTC, datetime, timedelta
-from typing import Annotated
+from datetime import UTC, datetime
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
@@ -13,10 +12,10 @@ from app.models.room import Room
 from app.models.system_config import SystemConfig
 from app.models.user import User
 from app.schemas.config import ConfigResponse, ConfigUpdate, SystemStats
+from app.schemas.message import MessageResponse, WSMessage
 from app.schemas.room import RoomSummary
 from app.schemas.user import UserResponse
 from app.services.connection_manager import manager
-from app.schemas.message import WSMessage
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -74,9 +73,33 @@ async def list_all_rooms(db: DBSession, _: AdminUser, status_filter: str | None 
                 message_count=msg_count.scalar() or 0,
                 last_activity_at=r.last_activity_at,
                 created_at=r.created_at,
+                passcode=r.passcode,
             )
         )
     return summaries
+
+
+@router.post("/rooms/{room_id}/archive", status_code=status.HTTP_200_OK)
+async def archive_room(room_id: UUID, db: DBSession, _: AdminUser):
+    result = await db.execute(select(Room).where(Room.id == room_id))
+    room = result.scalar_one_or_none()
+    if not room:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Room not found")
+    if room.status != "active":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Room is not active")
+
+    # Notify users if any are online
+    online_count = manager.get_online_count(str(room_id))
+    if online_count > 0:
+        await manager.broadcast_to_room(
+            str(room_id),
+            WSMessage(type="system", content="This room has been archived by an admin."),
+        )
+
+    room.status = "pending_destroy"
+    room.destroyed_at = datetime.now(UTC)
+    await db.flush()
+    return {"detail": "Room archived successfully"}
 
 
 @router.post("/rooms/{room_id}/destroy", status_code=status.HTTP_200_OK)
@@ -85,23 +108,65 @@ async def destroy_room(room_id: UUID, db: DBSession, _: AdminUser):
     room = result.scalar_one_or_none()
     if not room:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Room not found")
-    if room.status == "destroyed":
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Room already destroyed")
-
-    # Notify users if any are online
-    online_count = manager.get_online_count(str(room_id))
-    if online_count > 0:
-        await manager.broadcast_to_room(
-            str(room_id),
-            WSMessage(type="system", content="This room has been destroyed by an admin."),
+    if room.status == "active":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Active rooms must be archived before destruction",
         )
 
-    # Delete messages and mark room
     await db.execute(delete(Message).where(Message.room_id == room_id))
-    room.status = "destroyed"
-    room.destroyed_at = datetime.now(UTC)
+    await db.delete(room)
     await db.flush()
-    return {"detail": "Room destroyed successfully"}
+    return {"detail": "Room permanently destroyed"}
+
+
+@router.post("/rooms/{room_id}/restore", status_code=status.HTTP_200_OK)
+async def restore_room(room_id: UUID, db: DBSession, _: AdminUser):
+    """Restore a destroyed or pending_destroy room back to active."""
+    result = await db.execute(select(Room).where(Room.id == room_id))
+    room = result.scalar_one_or_none()
+    if not room:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Room not found")
+    if room.status == "active":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Room is already active")
+
+    # Check passcode doesn't conflict with an active room
+    existing = await db.execute(
+        select(Room).where(
+            Room.passcode == room.passcode,
+            Room.status != "destroyed",
+            Room.id != room.id,
+        )
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Passcode is already in use by another active room",
+        )
+
+    room.status = "active"
+    room.destroyed_at = None
+    room.last_activity_at = datetime.now(UTC)
+    await db.flush()
+    return {"detail": "Room restored successfully"}
+
+
+@router.get("/rooms/{room_id}/messages", response_model=list[MessageResponse])
+async def get_room_messages_admin(room_id: UUID, db: DBSession, _: AdminUser, limit: int = 100):
+    """Admin: view messages in any room regardless of status."""
+    result = await db.execute(select(Room).where(Room.id == room_id))
+    room = result.scalar_one_or_none()
+    if not room:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Room not found")
+
+    result = await db.execute(
+        select(Message)
+        .where(Message.room_id == room_id)
+        .order_by(Message.created_at.desc())
+        .limit(limit)
+    )
+    messages = result.scalars().all()
+    return list(reversed(messages))
 
 
 # ── Config Management ────────────────────────────────────────────────

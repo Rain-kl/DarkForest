@@ -3,6 +3,7 @@
 # Environment
 .env
 *.log
+frontend/dist/
 
 # OS
 .DS_Store

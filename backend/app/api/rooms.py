@@ -51,8 +51,10 @@ async def create_room(body: RoomCreate, request: Request, db: DBSession):
             detail=f"Rate limit exceeded. You can create up to the configured limit per hour. ({count} used)",
         )
 
-    # Check passcode uniqueness
-    existing = await db.execute(select(Room).where(Room.passcode == body.passcode, Room.status == "active"))
+    # Check passcode uniqueness (only among non-destroyed rooms)
+    existing = await db.execute(
+        select(Room).where(Room.passcode == body.passcode, Room.status != "destroyed")
+    )
     if existing.scalar_one_or_none():
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
