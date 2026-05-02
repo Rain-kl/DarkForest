@@ -10,7 +10,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 COPY pyproject.toml uv.lock* ./
 
 RUN uv sync \
-    --frozen \
     --no-dev \
     --no-cache \
     --no-install-project
